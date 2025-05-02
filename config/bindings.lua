@@ -1,250 +1,313 @@
-local wezterm = require('wezterm')
-local platform = require('utils.platform')
-local backdrops = require('utils.backdrops')
+local M = {}
+
+local wezterm = require("wezterm")
 local act = wezterm.action
+local mux = wezterm.mux
 
-local mod = {}
+local search_direction = {
+  BACKWARD = 0,
+  FORWARD = 1,
+}
 
-if platform.is_mac then
-   mod.SUPER = 'SUPER'
-   mod.SUPER_REV = 'SUPER|CTRL'
-elseif platform.is_win or platform.is_linux then
-   mod.SUPER = 'ALT' -- to not conflict with Windows key shortcuts
-   mod.SUPER_REV = 'ALT|CTRL'
+wezterm.GLOBAL.tmux_search_directions = {}
+
+M.action = {
+  ClearPattern = wezterm.action_callback(function(window, pane)
+    wezterm.GLOBAL.tmux_search_directions[tostring(pane)] = nil
+    window:perform_action(act.Multiple({
+      act.CopyMode("ClearPattern"),
+      act.CopyMode("AcceptPattern"),
+    }), pane)
+  end),
+
+  ClearSelectionOrClearPatternOrClose = wezterm.action_callback(function(window, pane)
+    local action
+
+    if window:get_selection_text_for_pane(pane) ~= "" then
+      action = act.Multiple({
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      })
+    elseif wezterm.GLOBAL.tmux_search_directions[tostring(pane)] then
+      action = M.action.ClearPattern
+    else
+      action = act.CopyMode("Close")
+    end
+
+    window:perform_action(action, pane)
+  end),
+
+  NextMatch = wezterm.action_callback(function(window, pane)
+    local direction = wezterm.GLOBAL.tmux_search_directions[tostring(pane)]
+    local action
+
+    if not direction then
+      return
+    end
+
+    if direction == search_direction.BACKWARD then
+      action = act.Multiple({
+        act.CopyMode("PriorMatch"),
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      })
+    elseif direction == search_direction.FORWARD then
+      action = act.Multiple({
+        act.CopyMode("NextMatch"),
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      })
+    end
+
+    window:perform_action(action, pane)
+  end),
+
+  PriorMatch = wezterm.action_callback(function(window, pane)
+    local direction = wezterm.GLOBAL.tmux_search_directions[tostring(pane)]
+    local action
+
+    if not direction then
+      return
+    end
+
+    if direction == search_direction.BACKWARD then
+      action = act.Multiple({
+        act.CopyMode("NextMatch"),
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      })
+    elseif direction == search_direction.FORWARD then
+      action = act.Multiple({
+        act.CopyMode("PriorMatch"),
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      })
+    end
+
+    window:perform_action(action, pane)
+  end),
+
+  MovePaneToNewTab = wezterm.action_callback(function(_, pane)
+    local tab, _ = pane:move_to_new_tab()
+    tab:activate()
+  end),
+
+  RenameWorkspace = wezterm.action_callback(function(window, pane)
+    window:perform_action(act.PromptInputLine({
+      description = "Rename workspace: ",
+      action = wezterm.action_callback(function(_, _, line)
+        if not line or line == "" then
+          return
+        end
+
+        mux.rename_workspace(mux.get_active_workspace(), line)
+      end),
+    }), pane)
+  end),
+
+  SearchBackward = wezterm.action_callback(function(window, pane)
+    wezterm.GLOBAL.tmux_search_directions[tostring(pane)] = search_direction.BACKWARD
+
+    window:perform_action(act.Multiple({
+      act.CopyMode("ClearPattern"),
+      act.CopyMode("EditPattern"),
+    }), pane)
+  end),
+
+  SearchForward = wezterm.action_callback(function(window, pane)
+    wezterm.GLOBAL.tmux_search_directions[tostring(pane)] = search_direction.FORWARD
+
+    window:perform_action(act.Multiple({
+      act.CopyMode("ClearPattern"),
+      act.CopyMode("EditPattern"),
+    }), pane)
+  end),
+
+  WorkspaceSelect = wezterm.action_callback(function(window, pane)
+    local active_workspace = mux.get_active_workspace()
+    local workspaces = mux.get_workspace_names()
+    local num_tabs_by_workspace = {}
+
+    for _, mux_window in ipairs(mux.all_windows()) do
+      local workspace = mux_window:get_workspace()
+      local num_tabs = #mux_window:tabs()
+
+      if num_tabs_by_workspace[workspace] then
+        num_tabs_by_workspace[workspace] = num_tabs_by_workspace[workspace] + num_tabs
+      else
+        num_tabs_by_workspace[workspace] = num_tabs
+      end
+    end
+
+    local choices = {
+      {
+        id = active_workspace,
+        label = active_workspace .. ": " .. num_tabs_by_workspace[active_workspace] .. " tabs (active)",
+      },
+    }
+
+    for _, workspace in ipairs(workspaces) do
+      if workspace ~= active_workspace then
+        table.insert(choices, {
+          id = workspace,
+          label = workspace .. ": " .. num_tabs_by_workspace[workspace] .. " tabs",
+        })
+      end
+    end
+
+    window:perform_action(act.InputSelector({
+      title = "Select Workspace",
+      choices = choices,
+      action = wezterm.action_callback(function(_, _, id, _)
+        if not id then
+          return
+        end
+
+        mux.set_active_workspace(id)
+      end),
+    }), pane)
+  end),
+}
+
+---@param config unknown
+---@param _ { }
+function M.apply_to_config(config, _)
+  if not config.leader then
+    config.leader = { key = "b", mods = "CTRL" }
+    wezterm.log_warn("No leader key set, using default: Ctrl-b")
+  end
+
+  local keys = {
+    { key = config.leader.key, mods = "LEADER|" .. config.leader.mods, action = act.SendKey(config.leader) },
+
+    -- Workspaces
+    { key = "$",               mods = "LEADER",                        action = M.action.RenameWorkspace },
+    { key = "s",               mods = "LEADER",                        action = M.action.WorkspaceSelect },
+    { key = "(",               mods = "LEADER",                        action = act.SwitchWorkspaceRelative(-1) },
+    { key = ")",               mods = "LEADER",                        action = act.SwitchWorkspaceRelative(1) },
+
+    -- Tabs
+    { key = "c",               mods = "LEADER",                        action = act.SpawnTab("CurrentPaneDomain") },
+    { key = "&",               mods = "LEADER",                        action = act.CloseCurrentTab({ confirm = true }) },
+    { key = "p",               mods = "LEADER",                        action = act.ActivateTabRelative(-1) },
+    { key = "n",               mods = "LEADER",                        action = act.ActivateTabRelative(1) },
+    { key = "l",               mods = "LEADER",                        action = act.ActivateLastTab },
+
+    -- Panes
+    {
+      key = "%",
+      mods = "LEADER",
+      action = act.SplitHorizontal({
+        domain = "CurrentPaneDomain" })
+    },
+    {
+      key = "\"",
+      mods = "LEADER",
+      action = act.SplitVertical({
+        domain = "CurrentPaneDomain" })
+    },
+    { key = "{",          mods = "LEADER",      action = act.RotatePanes("CounterClockwise") },
+    { key = "}",          mods = "LEADER",      action = act.RotatePanes("Clockwise") },
+    { key = "LeftArrow",  mods = "LEADER",      action = act.ActivatePaneDirection("Left") },
+    { key = "DownArrow",  mods = "LEADER",      action = act.ActivatePaneDirection("Down") },
+    { key = "UpArrow",    mods = "LEADER",      action = act.ActivatePaneDirection("Up") },
+    { key = "RightArrow", mods = "LEADER",      action = act.ActivatePaneDirection("Right") },
+    { key = "q",          mods = "LEADER",      action = act.PaneSelect({ mode = "Activate" }) },
+    { key = "z",          mods = "LEADER",      action = act.TogglePaneZoomState },
+    { key = "!",          mods = "LEADER",      action = M.action.MovePaneToNewTab },
+    { key = "LeftArrow",  mods = "LEADER|CTRL", action = act.AdjustPaneSize({ "Left", 5 }) },
+    { key = "DownArrow",  mods = "LEADER|CTRL", action = act.AdjustPaneSize({ "Down", 5 }) },
+    { key = "UpArrow",    mods = "LEADER|CTRL", action = act.AdjustPaneSize({ "Up", 5 }) },
+    { key = "RightArrow", mods = "LEADER|CTRL", action = act.AdjustPaneSize({ "Right", 5 }) },
+    { key = "x",          mods = "LEADER",      action = act.CloseCurrentPane({ confirm = true }) },
+
+    { key = " ",          mods = "LEADER",      action = act.QuickSelect },
+
+    -- Copy Mode
+    { key = "[",          mods = "LEADER",      action = act.ActivateCopyMode },
+  }
+
+  local index_offset = config.tab_and_split_indices_are_zero_based and 0 or 1
+  for i = index_offset, 9 do
+    table.insert(keys, { key = tostring(i), mods = "LEADER", action = act.ActivateTab(i - index_offset) })
+  end
+
+  local copy_mode = {
+    {
+      key = "y",
+      mods = "NONE",
+      action = act.Multiple({
+        act.CopyTo("Clipboard"),
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      }),
+    },
+    { key = "Escape", mods = "NONE",  action = M.action.ClearSelectionOrClearPatternOrClose },
+    { key = "v",      mods = "NONE",  action = act.CopyMode { SetSelectionMode = "Cell" } },
+    { key = "v",      mods = "SHIFT", action = act.CopyMode { SetSelectionMode = "Line" } },
+    { key = "v",      mods = "CTRL",  action = act.CopyMode { SetSelectionMode = "Block" } },
+    { key = "h",      mods = "NONE",  action = act.CopyMode("MoveLeft") },
+    { key = "j",      mods = "NONE",  action = act.CopyMode("MoveDown") },
+    { key = "k",      mods = "NONE",  action = act.CopyMode("MoveUp") },
+    { key = "l",      mods = "NONE",  action = act.CopyMode("MoveRight") },
+    { key = "w",      mods = "NONE",  action = act.CopyMode("MoveForwardWord") },
+    { key = "b",      mods = "NONE",  action = act.CopyMode("MoveBackwardWord") },
+    { key = "e",      mods = "NONE",  action = act.CopyMode("MoveForwardWordEnd") },
+    { key = "0",      mods = "NONE",  action = act.CopyMode("MoveToStartOfLine") },
+    { key = "$",      mods = "NONE",  action = act.CopyMode("MoveToEndOfLineContent") },
+    { key = "^",      mods = "NONE",  action = act.CopyMode("MoveToStartOfLineContent") },
+    { key = "G",      mods = "NONE",  action = act.CopyMode("MoveToScrollbackBottom") },
+    { key = "g",      mods = "NONE",  action = act.CopyMode("MoveToScrollbackTop") },
+    { key = "h",      mods = "SHIFT", action = act.CopyMode("MoveToViewportTop") },
+    { key = "m",      mods = "SHIFT", action = act.CopyMode("MoveToViewportMiddle") },
+    { key = "l",      mods = "SHIFT", action = act.CopyMode("MoveToViewportBottom") },
+    { key = "b",      mods = "CTRL",  action = act.CopyMode("PageUp") },
+    { key = "u",      mods = "CTRL",  action = act.CopyMode { MoveByPage = -0.5 } },
+    { key = "f",      mods = "CTRL",  action = act.CopyMode("PageDown") },
+    { key = "d",      mods = "CTRL",  action = act.CopyMode { MoveByPage = 0.5 } },
+
+    { key = "/",      mods = "NONE",  action = M.action.SearchForward },
+    { key = "?",      mods = "NONE",  action = M.action.SearchBackward },
+    { key = "n",      mods = "NONE",  action = M.action.NextMatch },
+    { key = "N",      mods = "NONE",  action = M.action.PriorMatch },
+  }
+
+  local search_mode = {
+    {
+      key = "Enter",
+      action = act.Multiple({
+        act.CopyMode("AcceptPattern"),
+        act.ClearSelection,
+        act.CopyMode("ClearSelectionMode"),
+      }),
+    },
+    { key = "Escape", action = M.action.ClearPattern },
+  }
+
+  if not config.keys then
+    config.keys = {}
+  end
+  for _, key in ipairs(keys) do
+    table.insert(config.keys, key)
+  end
+
+  if not config.key_tables then
+    config.key_tables = {}
+  end
+
+  if not config.key_tables.copy_mode then
+    config.key_tables.copy_mode = {}
+  end
+  for _, key in ipairs(copy_mode) do
+    table.insert(config.key_tables.copy_mode, key)
+  end
+
+  if not config.key_tables.search_mode then
+    config.key_tables.search_mode = {}
+  end
+  for _, key in ipairs(search_mode) do
+    table.insert(config.key_tables.search_mode, key)
+  end
 end
 
--- stylua: ignore
-local keys = {
-   -- misc/useful --
-   { key = 'F1', mods = 'NONE', action = 'ActivateCopyMode' },
-   { key = 'F2', mods = 'NONE', action = act.ActivateCommandPalette },
-   { key = 'F3', mods = 'NONE', action = act.ShowLauncher },
-   { key = 'F4', mods = 'NONE', action = act.ShowLauncherArgs({ flags = 'FUZZY|TABS' }) },
-   {
-      key = 'F5',
-      mods = 'NONE',
-      action = act.ShowLauncherArgs({ flags = 'FUZZY|WORKSPACES' }),
-   },
-   { key = 'F11', mods = 'NONE',    action = act.ToggleFullScreen },
-   { key = 'F12', mods = 'NONE',    action = act.ShowDebugOverlay },
-   { key = 'f',   mods = mod.SUPER, action = act.Search({ CaseInSensitiveString = '' }) },
-   {
-      key = 'u',
-      mods = mod.SUPER_REV,
-      action = wezterm.action.QuickSelectArgs({
-         label = 'open url',
-         patterns = {
-            '\\((https?://\\S+)\\)',
-            '\\[(https?://\\S+)\\]',
-            '\\{(https?://\\S+)\\}',
-            '<(https?://\\S+)>',
-            '\\bhttps?://\\S+[)/a-zA-Z0-9-]+'
-         },
-         action = wezterm.action_callback(function(window, pane)
-            local url = window:get_selection_text_for_pane(pane)
-            wezterm.log_info('opening: ' .. url)
-            wezterm.open_with(url)
-         end),
-      }),
-   },
-
-   -- cursor movement --
-   { key = 'LeftArrow',  mods = mod.SUPER,     action = act.SendString '\u{1b}OH' },
-   { key = 'RightArrow', mods = mod.SUPER,     action = act.SendString '\u{1b}OF' },
-   { key = 'Backspace',  mods = mod.SUPER,     action = act.SendString '\u{15}' },
-
-   -- copy/paste --
-   { key = 'c',          mods = 'CTRL|SHIFT',  action = act.CopyTo('Clipboard') },
-   { key = 'v',          mods = 'CTRL|SHIFT',  action = act.PasteFrom('Clipboard') },
-
-   -- tabs --
-   -- tabs: spawn+close
-   { key = 't',          mods = mod.SUPER,     action = act.SpawnTab('DefaultDomain') },
-   { key = 't',          mods = mod.SUPER_REV, action = act.SpawnTab({ DomainName = 'WSL:Ubuntu' }) },
-   { key = 'w',          mods = mod.SUPER_REV, action = act.CloseCurrentTab({ confirm = false }) },
-
-   -- tabs: navigation
-   { key = '[',          mods = mod.SUPER,     action = act.ActivateTabRelative(-1) },
-   { key = ']',          mods = mod.SUPER,     action = act.ActivateTabRelative(1) },
-   { key = '[',          mods = mod.SUPER_REV, action = act.MoveTabRelative(-1) },
-   { key = ']',          mods = mod.SUPER_REV, action = act.MoveTabRelative(1) },
-
-   -- tab: title
-   { key = '0',          mods = mod.SUPER,     action = act.EmitEvent('tabs.manual-update-tab-title') },
-   { key = '0',          mods = mod.SUPER_REV, action = act.EmitEvent('tabs.reset-tab-title') },
-
-   -- tab: hide tab-bar
-   { key = '9',          mods = mod.SUPER,     action = act.EmitEvent('tabs.toggle-tab-bar'), },
-
-   -- window --
-   -- window: spawn windows
-   { key = 'n',          mods = mod.SUPER,     action = act.SpawnWindow },
-
-   -- window: zoom window
-   {
-      key = '-',
-      mods = mod.SUPER,
-      action = wezterm.action_callback(function(window, _pane)
-         local dimensions = window:get_dimensions()
-         if dimensions.is_full_screen then
-            return
-         end
-         local new_width = dimensions.pixel_width - 50
-         local new_height = dimensions.pixel_height - 50
-         window:set_inner_size(new_width, new_height)
-      end)
-   },
-   {
-      key = '=',
-      mods = mod.SUPER,
-      action = wezterm.action_callback(function(window, _pane)
-         local dimensions = window:get_dimensions()
-         if dimensions.is_full_screen then
-            return
-         end
-         local new_width = dimensions.pixel_width + 50
-         local new_height = dimensions.pixel_height + 50
-         window:set_inner_size(new_width, new_height)
-      end)
-   },
-
-   -- background controls --
-   {
-      key = [[/]],
-      mods = mod.SUPER,
-      action = wezterm.action_callback(function(window, _pane)
-         backdrops:random(window)
-      end),
-   },
-   {
-      key = [[,]],
-      mods = mod.SUPER,
-      action = wezterm.action_callback(function(window, _pane)
-         backdrops:cycle_back(window)
-      end),
-   },
-   {
-      key = [[.]],
-      mods = mod.SUPER,
-      action = wezterm.action_callback(function(window, _pane)
-         backdrops:cycle_forward(window)
-      end),
-   },
-   {
-      key = [[/]],
-      mods = mod.SUPER_REV,
-      action = act.InputSelector({
-         title = 'InputSelector: Select Background',
-         choices = backdrops:choices(),
-         fuzzy = true,
-         fuzzy_description = 'Select Background: ',
-         action = wezterm.action_callback(function(window, _pane, idx)
-            if not idx then
-               return
-            end
-            ---@diagnostic disable-next-line: param-type-mismatch
-            backdrops:set_img(window, tonumber(idx))
-         end),
-      }),
-   },
-   {
-      key = 'b',
-      mods = mod.SUPER,
-      action = wezterm.action_callback(function(window, _pane)
-         backdrops:toggle_focus(window)
-      end)
-   },
-
-   -- panes --
-   -- panes: split panes
-   {
-      key = [[\]],
-      mods = mod.SUPER,
-      action = act.SplitVertical({ domain = 'CurrentPaneDomain' }),
-   },
-   {
-      key = [[\]],
-      mods = mod.SUPER_REV,
-      action = act.SplitHorizontal({ domain = 'CurrentPaneDomain' }),
-   },
-
-   -- panes: zoom+close pane
-   { key = 'Enter', mods = mod.SUPER,     action = act.TogglePaneZoomState },
-   { key = 'w',     mods = mod.SUPER,     action = act.CloseCurrentPane({ confirm = false }) },
-
-   -- panes: navigation
-   { key = 'k',     mods = mod.SUPER_REV, action = act.ActivatePaneDirection('Up') },
-   { key = 'j',     mods = mod.SUPER_REV, action = act.ActivatePaneDirection('Down') },
-   { key = 'h',     mods = mod.SUPER_REV, action = act.ActivatePaneDirection('Left') },
-   { key = 'l',     mods = mod.SUPER_REV, action = act.ActivatePaneDirection('Right') },
-   {
-      key = 'p',
-      mods = mod.SUPER_REV,
-      action = act.PaneSelect({ alphabet = '1234567890', mode = 'SwapWithActiveKeepFocus' }),
-   },
-
-   -- panes: scroll pane
-   { key = 'u',        mods = mod.SUPER, action = act.ScrollByLine(-5) },
-   { key = 'd',        mods = mod.SUPER, action = act.ScrollByLine(5) },
-   { key = 'PageUp',   mods = 'NONE',    action = act.ScrollByPage(-0.75) },
-   { key = 'PageDown', mods = 'NONE',    action = act.ScrollByPage(0.75) },
-
-   -- key-tables --
-   -- resizes fonts
-   {
-      key = 'f',
-      mods = 'LEADER',
-      action = act.ActivateKeyTable({
-         name = 'resize_font',
-         one_shot = false,
-         timemout_miliseconds = 1000,
-      }),
-   },
-   -- resize panes
-   {
-      key = 'p',
-      mods = 'LEADER',
-      action = act.ActivateKeyTable({
-         name = 'resize_pane',
-         one_shot = false,
-         timemout_miliseconds = 1000,
-      }),
-   },
-}
-
--- stylua: ignore
-local key_tables = {
-   resize_font = {
-      { key = 'k',      action = act.IncreaseFontSize },
-      { key = 'j',      action = act.DecreaseFontSize },
-      { key = 'r',      action = act.ResetFontSize },
-      { key = 'Escape', action = 'PopKeyTable' },
-      { key = 'q',      action = 'PopKeyTable' },
-   },
-   resize_pane = {
-      { key = 'k',      action = act.AdjustPaneSize({ 'Up', 1 }) },
-      { key = 'j',      action = act.AdjustPaneSize({ 'Down', 1 }) },
-      { key = 'h',      action = act.AdjustPaneSize({ 'Left', 1 }) },
-      { key = 'l',      action = act.AdjustPaneSize({ 'Right', 1 }) },
-      { key = 'Escape', action = 'PopKeyTable' },
-      { key = 'q',      action = 'PopKeyTable' },
-   },
-}
-
-local mouse_bindings = {
-   -- Ctrl-click will open the link under the mouse cursor
-   {
-      event = { Up = { streak = 1, button = 'Left' } },
-      mods = 'CTRL',
-      action = act.OpenLinkAtMouseCursor,
-   },
-}
-
-return {
-   disable_default_key_bindings = true,
-   -- disable_default_mouse_bindings = true,
-   leader = { key = 'Space', mods = mod.SUPER_REV },
-   keys = keys,
-   key_tables = key_tables,
-   mouse_bindings = mouse_bindings,
-}
+return M
