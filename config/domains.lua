@@ -1,4 +1,10 @@
 return {
+   -- https://wezterm.org/multiplexing.html#ssh-domains
+   -- thanks to the following posts, and I finally understand how to use domain
+   -- for migrating from tmux to wezterm successfully
+   -- https://github.com/wezterm/wezterm/discussions/4324
+   -- https://github.com/wezterm/wezterm/discussions/6356
+   -- https://mwop.net/blog/2024-07-04-how-i-use-wezterm.html
    default_gui_startup_args = { 'connect', 'unix.main' },
 
    -- ref: https://wezfurlong.org/wezterm/config/lua/SshDomain.html
