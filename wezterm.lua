@@ -28,3 +28,5 @@ require("config.bindings").apply_to_config(result, {})
 
 
 return result
+
+-- end of file

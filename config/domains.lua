@@ -1,4 +1,6 @@
 return {
+   default_gui_startup_args = { 'connect', 'unix.main' },
+
    -- ref: https://wezfurlong.org/wezterm/config/lua/SshDomain.html
    -- ssh_domains = {},
    ssh_domains = {
@@ -13,7 +15,11 @@ return {
    },
 
    -- ref: https://wezfurlong.org/wezterm/multiplexing.html#unix-domains
-   unix_domains = {},
+   unix_domains = {
+      {
+         name = "unix.main"
+      }
+   },
 
    -- ref: https://wezfurlong.org/wezterm/config/lua/WslDomain.html
    wsl_domains = {
