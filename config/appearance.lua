@@ -2,6 +2,9 @@ local gpu_adapters = require('utils.gpu-adapter')
 local backdrops = require('utils.backdrops')
 local colors = require('colors.custom')
 
+-- blur on linux is not supported by default
+-- https://github.com/wezterm/wezterm/issues/1614
+
 return {
    max_fps = 120,
    front_end = 'WebGpu',
@@ -25,7 +28,7 @@ return {
    background = backdrops:initial_options(false), -- set to true if you want wezterm to start on focus mode
 
    -- scrollbar
-   enable_scroll_bar = true,
+   -- enable_scroll_bar = true,
 
    -- tab bar
    enable_tab_bar = true,
@@ -36,6 +39,9 @@ return {
    switch_to_last_active_tab_when_closing_tab = true,
 
    -- window
+   window_background_opacity = 0.3,
+   macos_window_background_blur = 20,
+   win32_system_backdrop = 'Acrylic',
    window_padding = {
       left = 0,
       right = 0,
