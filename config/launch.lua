@@ -6,9 +6,9 @@ local options = {
 }
 
 if platform.is_win then
-   options.default_prog = { 'nu' }
+   options.default_prog = { 'nu', '-l' }
    options.launch_menu = {
-      { label = 'Nushell', args = { 'nu' } },
+      { label = 'Nushell', args = { 'nu', '-l' } },
       { label = 'PowerShell Core', args = { 'pwsh', '-NoLogo' } },
       { label = 'PowerShell Desktop', args = { 'powershell' } },
       { label = 'Command Prompt', args = { 'cmd' } },

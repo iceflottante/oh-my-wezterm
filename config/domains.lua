@@ -15,7 +15,7 @@ return {
          name = 'wsl.ssh',
          remote_address = 'localhost',
          multiplexing = 'None',
-         default_prog = { 'fish', '-l' },
+         default_prog = { 'nu', '-l' },
          assume_shell = 'Posix'
       }
    },
@@ -23,7 +23,12 @@ return {
    -- ref: https://wezfurlong.org/wezterm/multiplexing.html#unix-domains
    unix_domains = {
       {
-         name = "unix.main"
+         name = "unix.main",
+         -- the default shell env is different from unix on Windows
+         -- so set the default prog to `nu --login` manually
+         -- https://wezterm.org/config/launch.html#__tabbed_1_2
+         -- default_prog is not work under unix domains
+         -- default_prog = { 'nu', '-l' }
       }
    },
 
@@ -32,9 +37,9 @@ return {
       {
          name = 'WSL:Ubuntu',
          distribution = 'Ubuntu',
-         username = 'kevin',
-         default_cwd = '/home/kevin',
-         default_prog = { 'fish', '-l' },
+         username = 'ice',
+         default_cwd = '/home/ice',
+         default_prog = { 'nu', '-l' },
       },
    },
 }

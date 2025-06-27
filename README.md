@@ -9,6 +9,9 @@
 git clone git@github.com:iceflottante/oh-my-wezterm.git ~/.config/wezterm --depth 1
 ```
 
+### Plans
+- [ ] split code into plugins: https://wezterm.org/config/plugins.html
+
 ### Related works
 
 - https://github.com/KevinSilvester/wezterm-config
