@@ -6,7 +6,7 @@
 ```nu
 # Windows/Linux/MacOS
 # @see https://wezterm.org/config/files.html#configuration-files
-git clone -b ice/dev git@github.com:iceflottante/oh-my-wezterm.git ~/.config/wezterm --depth 1
+git clone git@github.com:iceflottante/oh-my-wezterm.git ~/.config/wezterm --depth 1
 ```
 
 ### Related works
